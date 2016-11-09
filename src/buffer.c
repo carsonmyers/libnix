@@ -293,11 +293,15 @@ __increment(struct buffer *b, unsigned int *ptr) {
 }
 
 enum nix_err
-nix_buffer__get_lexeme(struct nix_buffer *buf, unsigned int **out) {
+nix_buffer__get_lexeme(
+    struct nix_buffer *buf,
+    unsigned int **out,
+    size_t exclude)
+{
     struct buffer *b = (struct buffer *)buf;
 
     unsigned int *lexeme;
-    TRY(__get_lexeme(b, &lexeme));
+    TRY(__get_lexeme(b, &lexeme, exclude));
     TRY(__reset_lexeme_p(b));
 
     *out = lexeme;
@@ -307,11 +311,15 @@ nix_buffer__get_lexeme(struct nix_buffer *buf, unsigned int **out) {
 }
 
 enum nix_err
-nix_buffer__peek_lexeme(struct nix_buffer *buf, unsigned int **out) {
+nix_buffer__peek_lexeme(
+    struct nix_buffer *buf,
+    unsigned int **out,
+    size_t exclude)
+{
     struct buffer *b = (struct buffer *)buf;
 
     unsigned int *lexeme;
-    TRY(__get_lexeme(b, &lexeme));
+    TRY(__get_lexeme(b, &lexeme, exclude));
 
     *out = lexeme;
 
@@ -320,7 +328,7 @@ nix_buffer__peek_lexeme(struct nix_buffer *buf, unsigned int **out) {
 }
 
 enum nix_err
-nix_buffer__discard_lexeme(struct nix_buffer *buf) {
+nix_buffer__discard_lexeme(struct nix_buffer *buf, size_t exclude) {
     struct buffer *b = (struct buffer *)buf;
 
     TRY(__reset_lexeme_p(b));
@@ -330,38 +338,53 @@ nix_buffer__discard_lexeme(struct nix_buffer *buf) {
 }
 
 enum nix_err
-__get_lexeme(struct buffer *b, unsigned int **out) {
+__get_lexeme(struct buffer *b, unsigned int **out, size_t exclude) {
     if (b == NULL || b->lexeme == NULL || b->read == NULL) {
         return NIXERR_BUF_INVPTR;
     }
 
-    size_t length;
+    if (b->lexeme == b->read) {
+        return NIXERR_BUF_INVLEN;
+    }
+
     unsigned int *buffer_end = b->right + b->p->buffer_size;
+    size_t length;
+    size_t start_length;
+    size_t end_length;
 
     if (b->read > b->lexeme) {
-        length = (
-            (buffer_end - b->read) +
-            (b->lexeme - b->left)
-        );
+        start_length = buffer_end - b->lexeme;
+        end_length = b->read - b->left;
+        length = start_length + end_length;
     } else {
-        length = b->read - b->lexeme;
+        start_length = b->read - b->lexeme;
+        end_length = 0;
+        length = start_length;
     }
+
+    if (exclude >= length) {
+        return NIXERR_BUF_INVLEN;
+    } else if (exclude > end_length) {
+        start_length -= exclude - end_length;
+        end_length = 0;
+    } else {
+        end_length -= exclude;
+    }
+
+    length -= exclude;
 
     unsigned int *lexeme;
     ALLOC(lexeme, length);
 
     unsigned int *l = lexeme;
-    unsigned int *r = b->read;
+    unsigned int *r = b->lexeme;
 
-    if (b->read > b->lexeme) {
-        while (l < buffer_end) {
-            *l++ = *r++;
-        }
-
-        l = r = b->left;
+    for (size_t i = 0; i < start_length; i++) {
+        *l++ = *r++;
     }
 
-    while (l < b->read) {
+    r = b->left;
+    for (size_t i = 0; i < end_length; i++) {
         *l++ = *r++;
     }
 

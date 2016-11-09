@@ -64,7 +64,7 @@ void
 __increment(struct buffer *, unsigned int *);
 
 enum nix_err
-__get_lexeme(struct buffer *, unsigned int **);
+__get_lexeme(struct buffer *, unsigned int **, size_t);
 
 enum nix_err
 __reset_lexeme_p(struct buffer *);

@@ -38,13 +38,19 @@ NIX_EXTERN(enum nix_err)
 nix_buffer__reset_peek(struct nix_buffer *buf);
 
 NIX_EXTERN(enum nix_err)
-nix_buffer__get_lexeme(struct nix_buffer *buf, unsigned int **out);
+nix_buffer__get_lexeme(
+    struct nix_buffer *buf,
+    unsigned int **out,
+    size_t exclude);
 
 NIX_EXTERN(enum nix_err)
-nix_buffer__peek_lexeme(struct nix_buffer *buf, unsigned int **out);
+nix_buffer__peek_lexeme(
+    struct nix_buffer *buf,
+    unsigned int **out,
+    size_t exclude);
 
 NIX_EXTERN(enum nix_err)
-nix_buffer__discard_lexeme(struct nix_buffer *buf);
+nix_buffer__discard_lexeme(struct nix_buffer *buf, size_t exclude);
 
 NIX_EXTERN(void)
 nix_buffer__free(struct nix_buffer **out);
