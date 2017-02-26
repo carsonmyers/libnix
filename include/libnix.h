@@ -4,6 +4,7 @@
 #include "libnix/buffer.h"
 #include "libnix/common.h"
 #include "libnix/error.h"
+#include "libnix/lexeme.h"
 #include "libnix/position.h"
 
 #endif

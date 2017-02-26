@@ -3,7 +3,6 @@
 
 #include <stdlib.h>
 #include "libnix/common.h"
-#include "libnix/error.h"
 
 #include "error.h"
 

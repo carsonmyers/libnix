@@ -1,8 +1,9 @@
 #ifndef INCLUDE_libnix_buffer_h__
 #define INCLUDE_libnix_buffer_h__
 
-#include "common.h"
-#include "position.h"
+#include "libnix/common.h"
+#include "libnix/lexeme.h"
+#include "libnix/position.h"
 
 NIX_BEGIN_DECL
 
@@ -40,13 +41,13 @@ nix_buffer__reset_peek(struct nix_buffer *buf);
 NIX_EXTERN(enum nix_err)
 nix_buffer__get_lexeme(
     struct nix_buffer *buf,
-    unsigned int **out,
+    struct nix_lexeme **out,
     size_t exclude);
 
 NIX_EXTERN(enum nix_err)
 nix_buffer__peek_lexeme(
     struct nix_buffer *buf,
-    unsigned int **out,
+    struct nix_lexeme **out,
     size_t exclude);
 
 NIX_EXTERN(enum nix_err)

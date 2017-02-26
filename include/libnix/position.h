@@ -1,7 +1,7 @@
 #ifndef INCLUDE_libnix_position_h__
 #define INCLUDE_libnix_position_h__
 
-#include "common.h"
+#include "libnix/common.h"
 
 NIX_BEGIN_DECL
 
