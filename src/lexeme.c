@@ -6,12 +6,12 @@
 enum nix_err
 nix_lexeme__init(
     struct nix_lexeme *out,
-    unsigned int *text,
-    struct nix_position *position,
-    size_t length)
+    uint32_t *text,
+    struct nix_position *start,
+    struct nix_position *end)
 {
-    out->position = position;
-    out->length = length;
+    out->start = start;
+    out->end = end;
     out->text = text;
 
     return NIXERR_NONE;
@@ -20,14 +20,14 @@ nix_lexeme__init(
 enum nix_err
 nix_lexeme__construct(
     struct nix_lexeme **out,
-    unsigned int *text,
-    struct nix_position *position,
-    size_t length)
+    uint32_t *text,
+    struct nix_position *start,
+    struct nix_position *end)
 {
     struct nix_lexeme *lexeme;
     ALLOC(lexeme, sizeof(struct nix_lexeme));
 
-    TRY(nix_lexeme__init(*out, text, position, length));
+    TRY(nix_lexeme__init(*out, text, start, end));
 
     EXCEPT(err)
     return err;
@@ -37,7 +37,8 @@ void
 nix_lexeme__free(struct nix_lexeme **out) {
     if (*out == NULL) return;
 
-    FREE((*out)->position);
+    FREE((*out)->start);
+    FREE((*out)->end);
     FREE((*out)->text);
     FREE(*out)
     

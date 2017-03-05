@@ -9,10 +9,10 @@
 NIX_BEGIN_DECL
 
 struct nix_lexeme {
-    struct nix_position *position;
-    size_t length;
+    struct nix_position *start;
+    struct nix_position *end;
 
-    unsigned int *text;
+    uint32_t *text;
 };
 
 NIX_EXTERN(void)
