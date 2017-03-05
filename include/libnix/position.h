@@ -1,14 +1,16 @@
 #ifndef INCLUDE_libnix_position_h__
 #define INCLUDE_libnix_position_h__
 
+#include <stdlib.h>
+
 #include "libnix/common.h"
 
 NIX_BEGIN_DECL
 
 struct nix_position {
-    unsigned int row;
-    unsigned int col;
-    unsigned int abs;
+    size_t row;
+    size_t col;
+    size_t abs;
 };
 
 NIX_EXTERN(enum nix_err)
