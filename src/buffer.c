@@ -22,29 +22,32 @@ nix_buffer__init(struct nix_buffer *out, FILE *in, size_t buffer_size) {
     TRY(__read_bom(in, &b->utf16, &b->reverse_order));
 
     if (b->utf16 == true) {
-        b->reader = __read_utf16;
+        b->reader = &__read_utf16;
     } else {
-        b->reader = __read_utf8;
+        b->reader = &__read_utf8;
     }
 
     b->p.buffer_size = buffer_size;
 
-    b->lexeme = NULL;
-    b->read = NULL;
-    b->peek = NULL;
-    b->eof = NULL;
-
-    b->at_eof = false;
-    
-    b->last_read = 0;
-    b->last_peek = 0;
-
-    b->p.lexeme = NULL;
-    b->p.read = NULL;
-    b->p.peek = NULL;
-
     b->buffer_ready[BUFFER_LEFT] = false;
     b->buffer_ready[BUFFER_RIGHT] = false;
+
+    b->eof = NULL;
+    b->at_eof = false;
+
+    TRY(__load_buffer(b, BUFFER_LEFT));
+
+    b->lexeme = b->left;
+    b->read = b->left;
+    b->peek = b->left;
+
+    TRY(nix_position__construct(&b->p.read));
+    TRY(nix_position__construct(&b->p.peek));
+    TRY(nix_position__construct(&b->p.lexeme));
+
+    b->last_lexeme = 0;
+    b->last_read = 0;
+    b->last_peek = 0;
 
     EXCEPT(err)
     return err;
@@ -57,10 +60,10 @@ __read_bom(FILE *input, bool *is_utf16, bool *reverse_order) {
     TRY(__read_bom_byte(input, &c));
 
     // Detect the FEFF byte-order mark for a UTF-16 document
-    if (c == '\xFE') {
+    if (c == u'\xFE') {
         TRY(__read_bom_byte(input, &c));
 
-        if (c == '\xFF') {
+        if (c == u'\xFF') {
             *is_utf16 = true;
             *reverse_order = false;
             return NIXERR_NONE;
@@ -70,10 +73,10 @@ __read_bom(FILE *input, bool *is_utf16, bool *reverse_order) {
     }
 
     // Detect the FFFE reverse byte-order mark for a UTF-16 document
-    if (c == '\xFF') {
+    if (c == u'\xFF') {
         TRY(__read_bom_byte(input, &c));
 
-        if (c == '\xFE') {
+        if (c == u'\xFE') {
             *is_utf16 = true;
             *reverse_order = true;
             return NIXERR_NONE;
@@ -83,13 +86,13 @@ __read_bom(FILE *input, bool *is_utf16, bool *reverse_order) {
     }
 
     // Detect the EFBBBF byte-order mark for a UTF-8 document
-    if (c == '\xEF') {
+    if (c == u'\xEF') {
         TRY(__read_bom_byte(input, &c));
 
-        if (c == '\xBB') {
+        if (c == u'\xBB') {
             TRY(__read_bom_byte(input, &c));
 
-            if (c == '\xBF') {
+            if (c == u'\xBF') {
                 *is_utf16 = false;
                 *reverse_order = false;
                 return NIXERR_NONE;
@@ -116,12 +119,12 @@ no_bom:
 
 static inline enum nix_err
 __read_bom_byte(FILE *input, uint8_t *out) {
-    size_t read = fread(&out, sizeof(uint8_t), 1, input);
+    size_t read = fread(out, sizeof(uint8_t), 1, input);
     if (read != 1) {
         if (feof(input)) {
             return NIXERR_BUF_EOF;
         } else {
-            return NUXERR_BUF_FILE;
+            return NIXERR_BUF_FILE;
         }
     }
 
@@ -147,32 +150,27 @@ enum nix_err
 nix_buffer__read(struct nix_buffer *buf, uint32_t *out) {
     struct buffer *b = (struct buffer *)buf;
 
-    TRY(__ensure_ptrs_initialized(b));
-
     if (b->at_eof && b->read != b->eof) {
         b->at_eof = false;
     }
 
-    bool consume_buffer = __at_start(b, b->read);
+    uint8_t *original_ptr = b->read;
+    struct nix_position original_position;
+    TRY(nix_position__copy(&original_position, b->p.read));
 
-    TRY(__read(b, out, &b->read, b->p.read, b->last_read));
-
-    if (consume_buffer) {
-        enum buffer_side side;
-        TRY(__buffer_side(b, &side, b->read));
-
-        b->buffer_ready[side] = false;
-    }
+    TRY(__read(b, out, &b->read, b->p.read, b->last_read, true));
 
     b->last_read = *out;
     b->last_peek = *out;
     TRY(nix_buffer__reset_peek(buf));
 
     EXCEPT(err)
-    CATCH(NIXERR_BUF_EOF) {
-        TRY(nix_buffer__reset_peek(buf));
+    CATCH(NIXERR_BUF_EXHAUST) {
+        b->read = original_ptr;
+        nix_position__copy(b->p.read, &original_position);
     }
 
+    nix_buffer__reset_peek(buf);
     return err;
 }
 
@@ -180,31 +178,19 @@ enum nix_err
 nix_buffer__peek(struct nix_buffer *buf, uint32_t *out) {
     struct buffer *b = (struct buffer *)buf;
 
-    TRY(__ensure_ptrs_initialized(b));
-    TRY(__read(b, out, &b->peek, b->p.peek, b->last_peek));
+    uint8_t *original_ptr = b->peek;
+    struct nix_position original_position;
+    TRY(nix_position__copy(&original_position, b->p.peek));
+
+    TRY(__read(b, out, &b->peek, b->p.peek, b->last_peek, true));
     b->last_peek = *out;
 
     EXCEPT(err)
-    return err;
-}
-
-static inline enum nix_err
-__ensure_ptrs_initialized(struct buffer *b) {
-    if (b == NULL) {
-        return NIXERR_BUF_INVPTR;
+    CATCH(NIXERR_BUF_EXHAUST) {
+        b->peek = original_ptr;
+        nix_position__copy(b->p.peek, &original_position);
     }
 
-    if (!b->read) {
-        b->read = b->left;
-        b->lexeme = b->read;
-        b->peek = b->read;
-
-        TRY(nix_position__construct(&b->p.read));
-        TRY(nix_position__construct(&b->p.peek));
-        TRY(nix_position__construct(&b->p.lexeme));
-    }
-
-    EXCEPT(err)
     return err;
 }
 
@@ -214,10 +200,11 @@ __read(
     uint32_t *out,
     uint8_t **ptr,
     struct nix_position *ptr_meta,
-    uint32_t last_c)
+    uint32_t last_c,
+    bool check_bounds)
 {
     uint32_t c;
-    TRY(b->reader(b, &c, ptr));
+    TRY(b->reader(b, &c, ptr, check_bounds));
 
     if (c == '\r' || (c == '\n' && last_c != '\r')) {
         ptr_meta->row += 1;
@@ -234,13 +221,27 @@ __read(
     return err;
 }
 
-static inline num nix_err
-__read_byte(struct buffer *b, uint8_t *out, uint8_t **ptr) {
+static inline enum nix_err
+__read_byte(struct buffer *b, uint8_t *out, uint8_t **ptr, bool check_bounds) {
+    if (check_bounds) {
+        TRY(__check_bounds(b, ptr));
+    }
+
+    *out = **ptr;
+    __increment(b, ptr);
+
+    EXCEPT(err)
+    return err;
+}
+
+static inline enum nix_err
+__check_bounds(struct buffer *b, uint8_t **ptr) {
     enum buffer_side side;
     TRY(__buffer_side(b, &side, *ptr));
 
-    if (__at_start(b, *ptr) && !b->buffer_ready[side]) {
-        TRY(__load_buffer(b, side));
+    enum buffer_side other_side = BUFFER_RIGHT;
+    if (side == BUFFER_RIGHT) {
+        other_side = BUFFER_LEFT;
     }
 
     if (*ptr == b->eof) {
@@ -252,35 +253,36 @@ __read_byte(struct buffer *b, uint8_t *out, uint8_t **ptr) {
         }
     }
 
-    *out = **ptr;
-    __increment(b, *ptr);
+    if (__at_end(b, *ptr) && !b->buffer_ready[other_side]) {
+        TRY(__load_buffer(b, other_side));
+    }
 
     EXCEPT(err)
     return err;
 }
 
 enum nix_err
-__read_utf8(struct buffer *b, uint32_t *out, uint8_t **ptr) {
-    uint8_t c;
-    TRY(__read_byte(b, &c, ptr));
+__read_utf8(struct buffer *b, uint32_t *out, uint8_t **ptr, bool check) {
+    uint8_t c = 0;
+    TRY(__read_byte(b, &c, ptr, check));
 
     // The first byte indicates the number of bytes to expect in the
     // encoding, and the rest of the bytes begin with 10
     //
-    // 0uuuuuuu                             | 0uuuuuuu
-    // 110uuuuu 10xxxxxx                    | 00000uuu uuxxxxxx
-    // 1110uuuu 10xxxxxx 10yyyyyy           | uuuuxxxx xxyyyyyy
-    // 11110uuu 10xxxxxx 10yyyyyy 10zzzzzz  | 000uuuxx xxxxyyyy yyzzzzzz
+    //                            0uuuuuuu |                   0uuuuuuu
+    //                   110xxxxx 10uuuuuu |          00000xxx xxuuuuuu
+    //          1110yyyy 10xxxxxx 10uuuuuu |          yyyyxxxx xxuuuuuu
+    // 11110zzz 10yyyyyy 10xxxxxx 10uuuuuu | 000zzzyy yyyyxxxx xxuuuuuu
 
     // If the high-order bit is 0, then this is equivalent to an ASCII byte
-    if (c & 0x80 == 0) {
+    if ((c & 0x80) == 0) {
         *out = c;
         return NIXERR_NONE;
     }
 
     // Otherwise, this character is encoded in multiple bytes
     size_t byte_count;
-    TRY(count_utf8_encoded_bytes(c, &byte_count));
+    TRY(__count_utf8_encoded_bytes(c, &byte_count));
 
     uint32_t decoded = 0;
 
@@ -299,7 +301,7 @@ __read_utf8(struct buffer *b, uint32_t *out, uint8_t **ptr) {
 
         byte_count--;
         if (byte_count > 0) {
-            TRY(__read_byte(b, &c, ptr));
+            TRY(__read_byte(b, &c, ptr, check));
             // Remaining bytes need the top 2 bits masked out
             byte_mask = 0x3F;
         }
@@ -319,7 +321,7 @@ __count_utf8_encoded_bytes(uint8_t first_byte, size_t *out) {
     size_t count = 0;
     bool found_zero = false;
     for (size_t i = 0; i < 5; i++) {
-        if (b & 0x80 != 0) {
+        if ((b & 0x80) != 0) {
             count++;
         } else {
             found_zero = true;
@@ -341,9 +343,9 @@ __count_utf8_encoded_bytes(uint8_t first_byte, size_t *out) {
 }
 
 enum nix_err
-__read_utf16(struct buffer *b, uint32_t *out, uint8_t **ptr) {
-    uint16_t c;
-    TRY(__read_utf16_data(b, &c, ptr));
+__read_utf16(struct buffer *b, uint32_t *out, uint8_t **ptr, bool check) {
+    uint16_t c = 0;
+    TRY(__read_utf16_data(b, &c, ptr, check));
     
     // UTF-16 is encoded either as a single 16-bit value, or as a
     // surrogate pair of two values. A single value can encode code points
@@ -363,33 +365,34 @@ __read_utf16(struct buffer *b, uint32_t *out, uint8_t **ptr) {
 
     // Check that the top 6 bits are valid for the first component of the
     // surrogate pair
-    if (c & 0xFC00 != 0xD800) {
+    if ((c & 0xFC00) != 0xD800) {
         return NIXERR_BUF_INVCHAR;
     }
 
     *out = 0;
-    *out = c & ~0xFC00 << 10;
+    *out = (c & ~0xFC00) << 10;
 
     // Check that the top 6 bits are valid for the second component
     // of the surrogate pair
-    TRY(__read_utf16_data(b, &c, ptr));
-    if (c & 0xFC00 != 0xDC00) {
+    TRY(__read_utf16_data(b, &c, ptr, check));
+    if ((c & 0xFC00) != 0xDC00) {
         return NIXERR_BUF_INVCHAR;
     }
 
     *out |= c & ~0xFC00;
+    *out |= 0x10000;
 
     EXCEPT(err)
     return err;
 }
 
 static inline enum nix_err
-__read_utf16_data(struct buffer *b, uint16_t *out, uint8_t **ptr) {
-    uint16_t first_byte;
-    TRY(__read_byte(b, &first_byte, ptr));
+__read_utf16_data(struct buffer *b, uint16_t *out, uint8_t **ptr, bool check) {
+    uint8_t first_byte = 0;
+    TRY(__read_byte(b, &first_byte, ptr, check));
 
-    uint16_t second_byte;
-    TRY(__read_byte(b, &second_byte, ptr));
+    uint8_t second_byte = 0;
+    TRY(__read_byte(b, &second_byte, ptr, check));
 
     *out = 0;
     if (b->reverse_order == false) {
@@ -419,7 +422,7 @@ nix_buffer__reset_peek(struct nix_buffer *buf) {
 }
 
 static inline enum nix_err
-__buffer_side(struct buffer *b, enum buffer_side *out, unsigned int *ptr) {
+__buffer_side(struct buffer *b, enum buffer_side *out, uint8_t *ptr) {
     if (ptr >= b->left && ptr < b->right) {
         *out = BUFFER_LEFT;
         return NIXERR_NONE;
@@ -432,16 +435,9 @@ __buffer_side(struct buffer *b, enum buffer_side *out, unsigned int *ptr) {
 }
 
 static inline bool
-__at_start(struct buffer *b, unsigned int *ptr) {
-    return ptr == b->left || ptr == b->right;
-}
-
-static inline bool
-__at_end(struct buffer *b, unsigned int *ptr) {
-    return (
-        ptr == b->left + b->p.buffer_size - 1 ||
-        ptr == b->right + b->p.buffer_size - 1
-    );
+__at_end(struct buffer *b, uint8_t *ptr) {
+    size_t offset = b->p.buffer_size - 1;
+    return ptr == b->left + offset || ptr == b->right + offset;
 }
 
 enum nix_err
@@ -452,14 +448,14 @@ __load_buffer(struct buffer *b, enum buffer_side side) {
         return NIXERR_BUF_EXHAUST;
     }
 
-    unsigned int *target;
+    uint8_t *target;
     if (side == BUFFER_LEFT) {
         target = b->buffer;
     } else {
         target = b->right;
     }
     
-    size_t i_size = sizeof(unsigned int);
+    size_t i_size = sizeof(uint8_t);
     size_t count = b->p.buffer_size;
     size_t result = fread(target, i_size, count, b->input);
 
@@ -471,7 +467,13 @@ __load_buffer(struct buffer *b, enum buffer_side side) {
         }
     }
 
+    enum buffer_side other_side = BUFFER_LEFT;
+    if (side == BUFFER_LEFT) {
+        other_side = BUFFER_RIGHT;
+    }
+
     b->buffer_ready[side] = true;
+    b->buffer_ready[other_side] = false;
 
     EXCEPT(err)
     return err;
@@ -481,36 +483,38 @@ static inline enum nix_err
 __buffer_occupied(struct buffer *b, bool *out, enum buffer_side side) {
     enum buffer_side test_side;
 
-    TRY(__buffer_side(b, &test_side, b->lexeme));
-    if (test_side == side) {
+    // It's fine if the pointers are invalid, because this function is only
+    // checking whether they actually point inside the buffer and is called
+    // before the buffer has been completely initialized.
+    enum nix_err side_err;
+    side_err = __buffer_side(b, &test_side, b->lexeme);
+    if (side_err == NIXERR_NONE && test_side == side) {
         *out = true;
         return NIXERR_NONE;
     }
 
-    TRY(__buffer_side(b, &test_side, b->read));
-    if (test_side == side) {
+    side_err = __buffer_side(b, &test_side, b->read);
+    if (side_err == NIXERR_NONE && test_side == side) {
         *out = true;
         return NIXERR_NONE;
     }
 
-    TRY(__buffer_side(b, &test_side, b->peek));
-    if (test_side == side) {
+    side_err = __buffer_side(b, &test_side, b->peek);
+    if (side_err == NIXERR_NONE && test_side == side) {
         *out = true;
         return NIXERR_NONE;
     }
 
     *out = false;
-
-    EXCEPT(err)
-    return err;
+    return NIXERR_NONE;
 }
 
 static inline void
-__increment(struct buffer *b, unsigned int *ptr) {
-    ptr++;
+__increment(struct buffer *b, uint8_t **ptr) {
+    (*ptr)++;
 
-    if (ptr >= b->buffer + b->p.buffer_size * 2) {
-        ptr = b->buffer;
+    if (*ptr >= b->buffer + b->p.buffer_size * 2) {
+        *ptr = b->buffer;
     }
 }
 
@@ -522,13 +526,18 @@ nix_buffer__get_lexeme(
 {
     struct buffer *b = (struct buffer *)buf;
 
-    struct nix_lexeme *lexeme;
-    TRY(__get_lexeme(b, &lexeme, exclude));
-    TRY(__reset_lexeme_p(b));
+    struct nix_lexeme *lexeme = NULL;
+    uint8_t *new_ptr = NULL;
+
+    TRY(__get_lexeme(b, &lexeme, &new_ptr, exclude));
+
+    b->lexeme = new_ptr;
+    TRY(nix_position__copy(b->p.lexeme, lexeme->end));
 
     *out = lexeme;
 
     EXCEPT(err);
+    nix_lexeme__free(&lexeme);
     return err;
 }
 
@@ -540,12 +549,15 @@ nix_buffer__peek_lexeme(
 {
     struct buffer *b = (struct buffer *)buf;
 
-    struct nix_lexeme *lexeme;
-    TRY(__get_lexeme(b, &lexeme, exclude));
+    struct nix_lexeme *lexeme = NULL;
+    uint8_t *new_ptr = NULL;
+
+    TRY(__get_lexeme(b, &lexeme, &new_ptr, exclude));
 
     *out = lexeme;
 
     EXCEPT(err);
+    nix_lexeme__free(&lexeme);
     return err;
 }
 
@@ -553,14 +565,35 @@ enum nix_err
 nix_buffer__discard_lexeme(struct nix_buffer *buf, size_t exclude) {
     struct buffer *b = (struct buffer *)buf;
 
-    TRY(__reset_lexeme_p(b));
+    if (exclude == 0) {
+        b->lexeme = b->read;
+        TRY(nix_position__copy(b->p.lexeme, b->p.read));
+
+        return NIXERR_NONE;
+    }
+
+    struct nix_lexeme *lexeme = NULL;
+    uint8_t *new_ptr = NULL;
+
+    TRY(__get_lexeme(b, &lexeme, &new_ptr, exclude));
+
+    b->lexeme = new_ptr;
+    TRY(nix_position__copy(b->p.lexeme, lexeme->end));
+
+    nix_lexeme__free(&lexeme);
 
     EXCEPT(err)
+    nix_lexeme__free(&lexeme);
     return err;
 }
 
 enum nix_err
-__get_lexeme(struct buffer *b, struct nix_lexeme **out, size_t exclude) {
+__get_lexeme(
+        struct buffer *b,
+        struct nix_lexeme **out,
+        uint8_t **new_ptr,
+        size_t exclude)
+{
     if (b == NULL || b->lexeme == NULL || b->read == NULL) {
         return NIXERR_BUF_INVPTR;
     }
@@ -569,69 +602,65 @@ __get_lexeme(struct buffer *b, struct nix_lexeme **out, size_t exclude) {
         return NIXERR_BUF_INVLEN;
     }
 
-    struct nix_position *lexeme_pos = NULL;
-    TRY(nix_position__construct(&lexeme_pos));
-    TRY(nix_position__copy(lexeme_pos, b->p.lexeme))
-    
-    unsigned int *buffer_end = b->right + b->p.buffer_size;
-    size_t length;
-    size_t start_length;
-    size_t end_length;
+    uint8_t *buffer_end = b->right + b->p.buffer_size;
+    size_t byte_length;
 
     if (b->read > b->lexeme) {
-        start_length = buffer_end - b->lexeme;
-        end_length = b->read - b->left;
-        length = start_length + end_length;
+        size_t byte_start_length = buffer_end - b->lexeme;
+        size_t byte_end_length = b->read - b->left;
+        byte_length = byte_start_length + byte_end_length;
     } else {
-        start_length = b->read - b->lexeme;
-        end_length = 0;
-        length = start_length;
+        byte_length = b->read - b->lexeme;
     }
 
+    size_t length = b->p.read->abs - b->p.lexeme->abs;
     if (exclude >= length) {
         return NIXERR_BUF_INVLEN;
-    } else if (exclude > end_length) {
-        start_length -= exclude - end_length;
-        end_length = 0;
-    } else {
-        end_length -= exclude;
     }
 
     length -= exclude;
-
-    unsigned int *text;
-    ALLOC(text, length);
-
-    unsigned int *l = text;
-    unsigned int *r = b->lexeme;
-
-    for (size_t i = 0; i < start_length; i++) {
-        *l++ = *r++;
-    }
-
-    r = b->left;
-    for (size_t i = 0; i < end_length; i++) {
-        *l++ = *r++;
-    }
-
-    struct nix_lexeme *lexeme;
-    TRY(nix_lexeme__construct(&lexeme, text, lexeme_pos, length));
-
-    *out = lexeme;
+    TRY(__read_lexeme(b, out, new_ptr, length));
 
     EXCEPT(err)
     return err;
 }
 
 enum nix_err
-__reset_lexeme_p(struct buffer *b) {
-    if (b == NULL || b->p.read == NULL) {
-        return NIXERR_BUF_INVPTR;
+__read_lexeme(
+        struct buffer *b,
+        struct nix_lexeme **out,
+        uint8_t **new_ptr,
+        size_t length)
+{
+    uint32_t *text = NULL;
+    struct nix_position *start = NULL;
+    struct nix_position *end = NULL;
+    struct nix_lexeme *lexeme = NULL;
+
+    ALLOC(text, sizeof(uint32_t) * length);
+
+    TRY(nix_position__construct(&start));
+    TRY(nix_position__copy(start, b->p.lexeme));
+
+    TRY(nix_position__construct(&end));
+    TRY(nix_position__copy(end, b->p.lexeme));
+
+    *new_ptr = b->lexeme;
+
+    for (size_t i = 0; i < length; i++) {
+        TRY(__read(b, &text[i], new_ptr, end, b->last_lexeme, false));
+        b->last_lexeme = text[i];
     }
 
-    TRY(nix_position__copy(b->p.lexeme, b->p.read));
+    TRY(nix_lexeme__construct(&lexeme, text, start, end));
+
+    *out = lexeme;
 
     EXCEPT(err)
+    FREE(text);
+    FREE(start);
+    FREE(end);
+    nix_lexeme__free(&lexeme);
     return err;
 }
 

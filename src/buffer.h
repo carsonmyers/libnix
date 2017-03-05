@@ -15,7 +15,7 @@ struct buffer {
     bool utf16;
     bool reverse_order;
 
-    enum nix_err (*reader)(struct buffer *, uint32_t *, uint8_t **);
+    enum nix_err (*reader)(struct buffer *, uint32_t *, uint8_t **, bool);
 
     uint8_t *buffer;
     uint8_t *left;
@@ -28,6 +28,7 @@ struct buffer {
 
     bool at_eof;
 
+    uint32_t last_lexeme;
     uint32_t last_read;
     uint32_t last_peek;
 
@@ -54,31 +55,32 @@ __read(
     uint32_t *,
     uint8_t **,
     struct nix_position *,
-    uint32_t last_c);
+    uint32_t last_c,
+    bool check_bounds);
 
 static inline enum nix_err
-__read_byte(struct buffer *, uint8_t *, uint8_t **);
+__read_byte(struct buffer *, uint8_t *, uint8_t **, bool);
+
+static inline enum nix_err
+__check_bounds(struct buffer *, uint8_t **);
 
 enum nix_err
-__read_utf8(struct buffer *, uint32_t *, uint8_t **);
+__read_utf8(struct buffer *, uint32_t *, uint8_t **, bool);
 
 static inline enum nix_err
 __count_utf8_encoded_bytes(uint8_t, size_t *);
 
 enum nix_err
-__read_utf16(struct buffer *, uint32_t *, uint8_t **);
+__read_utf16(struct buffer *, uint32_t *, uint8_t **, bool);
 
 static inline enum nix_err
-__read_utf16_data(struct buffer *, uint16_t *, uint8_t **);
+__read_utf16_data(struct buffer *, uint16_t *, uint8_t **, bool);
 
 static inline enum nix_err
-__buffer_side(struct buffer *, enum buffer_side *, unsigned int *);
+__buffer_side(struct buffer *, enum buffer_side *, uint8_t *);
 
 static inline bool
-__at_start(struct buffer *, unsigned int *);
-
-static inline bool
-__at_end(struct buffer *, unsigned int*);
+__at_end(struct buffer *, uint8_t *);
 
 enum nix_err
 __load_buffer(struct buffer *, enum buffer_side);
@@ -87,12 +89,12 @@ static inline enum nix_err
 __buffer_occupied(struct buffer *, bool *, enum buffer_side);
 
 static inline void
-__increment(struct buffer *, unsigned int *);
+__increment(struct buffer *, uint8_t **);
 
 enum nix_err
-__get_lexeme(struct buffer *, struct nix_lexeme **, size_t);
+__get_lexeme(struct buffer *, struct nix_lexeme **, uint8_t **, size_t);
 
 enum nix_err
-__reset_lexeme_p(struct buffer *);
+__read_lexeme(struct buffer *, struct nix_lexeme **, uint8_t **, size_t);
 
 #endif

@@ -22,18 +22,10 @@ NIX_EXTERN(enum nix_err)
 nix_buffer__construct(struct nix_buffer **out, FILE *in, size_t buffer_size);
 
 NIX_EXTERN(enum nix_err)
-nix_buffer__read(
-    struct nix_buffer *buf,
-    unsigned int *out,
-    size_t *read,
-    size_t count);
+nix_buffer__read(struct nix_buffer *buf, uint32_t *out);
 
 NIX_EXTERN(enum nix_err)
-nix_buffer__peek(
-    struct nix_buffer *buf,
-    unsigned int *out,
-    size_t *read,
-    size_t count);
+nix_buffer__peek(struct nix_buffer *buf, uint32_t *out);
 
 NIX_EXTERN(enum nix_err)
 nix_buffer__reset_peek(struct nix_buffer *buf);
